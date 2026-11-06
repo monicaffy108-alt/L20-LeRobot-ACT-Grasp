@@ -1,5 +1,14 @@
 # L20 LeRobot ACT Grasp
 
+<p align="center">
+  <img src="https://img.shields.io/badge/status-work_in_progress-yellow" alt="work in progress">
+  <img src="https://img.shields.io/badge/framework-LeRobot-yellow" alt="LeRobot">
+  <img src="https://img.shields.io/badge/policy-ACT-blue" alt="ACT">
+  <img src="https://img.shields.io/badge/hardware-LinkerHand_L20-orange" alt="LinkerHand L20">
+  <img src="https://img.shields.io/badge/training-RTX_5070_12GB-green" alt="RTX 5070">
+  <img src="https://img.shields.io/badge/sensor-RealSense_D405-teal" alt="RealSense D405">
+</p>
+
 Vision-conditioned grasping on the LinkerHand L20, a 16-DoF dexterous hand, trained with ACT
 (Action Chunking with Transformers) through [LeRobot](https://github.com/huggingface/lerobot).
 
