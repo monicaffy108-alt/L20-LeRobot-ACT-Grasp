@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import argparse
 import socket
+import sys
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -40,8 +41,11 @@ class FrameSource:
     """Capture thread that always exposes the most recent frame as JPEG."""
 
     def __init__(self, camera: int, width: int, height: int, fps: float) -> None:
-        # CAP_DSHOW opens faster on Windows; CAP_ANY is the fallback elsewhere.
-        self.cap = cv2.VideoCapture(camera, cv2.CAP_DSHOW)
+        # CAP_DSHOW opens faster on Windows; macOS and Linux use the default backend.
+        if sys.platform == "win32":
+            self.cap = cv2.VideoCapture(camera, cv2.CAP_DSHOW)
+        else:
+            self.cap = cv2.VideoCapture(camera)
         if not self.cap.isOpened():
             self.cap = cv2.VideoCapture(camera)
         if not self.cap.isOpened():

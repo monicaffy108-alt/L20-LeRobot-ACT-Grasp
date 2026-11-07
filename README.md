@@ -45,6 +45,17 @@ cap = cv2.VideoCapture("http://10.10.12.175:8080/video")
 The laptop needs no cable to the capture machine, only the same router. Allow port 8080 through
 the laptop firewall the first time it runs.
 
+On macOS, install into a virtual environment so Homebrew's Python does not block `pip`:
+
+```bash
+python3 -m venv .venv && source .venv/bin/activate
+pip install opencv-python numpy
+python scripts/laptop_camera.py
+```
+
+macOS asks for camera access on the first run; grant it to the terminal application. If the
+prompt was dismissed, re-enable it under System Settings → Privacy & Security → Camera.
+
 ## Status
 
 Work in progress. The dataset schema, training config and evaluation protocol are being built.
