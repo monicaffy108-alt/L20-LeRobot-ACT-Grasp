@@ -22,6 +22,29 @@ Vision-conditioned grasping on the LinkerHand L20, a 16-DoF dexterous hand, trai
 4. **Deploy** — the trained policy closes the loop on the real hand, conditioned on what the
    camera sees
 
+## Second camera (operator view)
+
+The RealSense watches the robot hand. A second camera watches the operator's hand, so MediaPipe
+can estimate joint angles. The two views must stay separate: if the policy is trained on frames
+that contain a human hand, it learns to react to the operator instead of the object.
+
+When the capture machine has no second camera, a laptop on the same network can serve its webcam
+as an MJPEG stream:
+
+```bash
+# on the laptop
+pip install opencv-python numpy
+python scripts/laptop_camera.py --camera 0 --port 8080
+# prints: open on desktop : http://10.10.12.175:8080/video
+
+# on the capture machine
+import cv2
+cap = cv2.VideoCapture("http://10.10.12.175:8080/video")
+```
+
+The laptop needs no cable to the capture machine, only the same router. Allow port 8080 through
+the laptop firewall the first time it runs.
+
 ## Status
 
 Work in progress. The dataset schema, training config and evaluation protocol are being built.
