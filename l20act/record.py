@@ -142,9 +142,12 @@ def main(argv=None) -> int:
     )
 
     recorded = 0
+    quit_requested = False
     try:
         with hand:
             for episode in range(1, args.episodes + 1):
+                if quit_requested:
+                    break
                 wait_for_enter(
                     f"\nEpisode {episode}/{args.episodes}: place the object, then press Enter "
                     "(Ctrl+C to stop)... "
@@ -163,12 +166,15 @@ def main(argv=None) -> int:
                     now = time.monotonic()
                     if now - started >= args.seconds:
                         break
-                    if pressed("dDqQ"):
-                        break
 
                     robot_frame = robot_cam.read()
                     if robot_frame is None:
                         continue
+                    if pressed("qQ"):
+                        quit_requested = True
+                        break
+                    if pressed("dD"):
+                        break
 
                     operator_frame = operator_cam.read()
                     points = None
@@ -194,8 +200,6 @@ def main(argv=None) -> int:
 
                     if not args.no_preview:
                         draw_preview(robot_frame, operator_frame, points, state, True)
-                        if pressed("qQ"):
-                            break
 
                     next_frame += 1.0 / args.fps
                     delay = next_frame - time.monotonic()
