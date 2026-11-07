@@ -56,6 +56,49 @@ python scripts/laptop_camera.py
 macOS asks for camera access on the first run; grant it to the terminal application. If the
 prompt was dismissed, re-enable it under System Settings → Privacy & Security → Camera.
 
+## Install
+
+```bash
+pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128
+pip install lerobot mediapipe linkerbot pyrealsense2
+```
+
+## Record demonstrations
+
+```bash
+python -m l20act.record \
+  --repo-id you/l20-grasp \
+  --task "pick up the block" \
+  --operator-url http://10.10.10.234:8080/video \
+  --episodes 20 --seconds 30
+```
+
+The operator's hand drives the hand; the D405 records what the policy will see. Press `d` to
+finish an episode early, `q` to quit. Between episodes the terminal waits for Enter so the object
+can be repositioned.
+
+Add `--dry-run` to exercise the whole loop without sending CAN traffic, and `--no-preview` on a
+headless machine.
+
+## Dataset schema
+
+| Key | Shape | Meaning |
+|---|---|---|
+| `observation.images.robot` | 480 × 640 × 3 | D405 colour frame, the policy input |
+| `observation.state` | 16 | measured joint angles (0–100) |
+| `action` | 16 | commanded joint angles (0–100) |
+| `task` | string | task description, stored per frame |
+
+Two decisions worth stating:
+
+- **Only one camera enters the dataset.** The operator view is deliberately excluded — a policy
+  trained on frames containing a human hand learns to depend on it, and no human hand exists at
+  deployment.
+- **Angles stay in the hardware's native 0–100 units.** LeRobot normalises internally, so
+  deploying a predicted action means calling `set_angles()` directly; no unit conversion sits
+  between the policy output and the CAN frame, where an error would be hard to see.
+
 ## Status
 
-Work in progress. The dataset schema, training config and evaluation protocol are being built.
+Recording pipeline verified end to end: 30 frames captured at a locked 10.0 fps in dry-run mode,
+dataset reloads with the expected shapes. Training and evaluation are next.
