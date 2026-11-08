@@ -1,7 +1,7 @@
 # L20 LeRobot ACT Grasp
 
 <p align="center">
-  <img src="https://img.shields.io/badge/status-work_in_progress-yellow" alt="work in progress">
+  <img src="https://img.shields.io/badge/status-grasping_on_hardware-brightgreen" alt="grasping on hardware">
   <img src="https://img.shields.io/badge/framework-LeRobot-yellow" alt="LeRobot">
   <img src="https://img.shields.io/badge/policy-ACT-blue" alt="ACT">
   <img src="https://img.shields.io/badge/hardware-LinkerHand_L20-orange" alt="LinkerHand L20">
@@ -11,6 +11,8 @@
 
 Vision-conditioned grasping on the LinkerHand L20, a 16-DoF dexterous hand, trained with ACT
 (Action Chunking with Transformers) through [LeRobot](https://github.com/huggingface/lerobot).
+
+**Demo: [the trained policy grasps a tissue pack, 5/5 runs](https://youtube.com/shorts/iZnRkgDtTtE)**
 
 ## Pipeline
 
@@ -131,7 +133,7 @@ CAN traffic.
 
 The loop is closed: the policy grasps a tissue pack on the real hand, **5/5 consecutive
 successful grasps** in closed-loop evaluation (~2.2 control steps/s, object re-placed between
-runs). Final model: 25 clean single-grasp demonstrations (2000 frames at 8 fps), ACT with
+runs) — [video](https://youtube.com/shorts/iZnRkgDtTtE). Final model: 25 clean single-grasp demonstrations (2000 frames at 8 fps), ACT with
 chunk size 30 trained for 20000 steps (L1 loss 0.43 → 0.09) on a single RTX 5070.
 
 Getting there took three dataset iterations, which is the real lesson of this repo:
