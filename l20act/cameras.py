@@ -67,20 +67,21 @@ class ThreadedCamera:
     """
 
     def __init__(self, source, width: int = 640, height: int = 480,
-                 timeout: float = 8.0):
+                 timeout: float = 8.0, stale_after: float = 2.0):
         import cv2
 
-        self._cap = cv2.VideoCapture(source)
-        if not self._cap.isOpened():
+        self._cv2 = cv2
+        self._source = source
+        self.width = width
+        self.height = height
+        self._stale_after = stale_after
+        self._cap = self._open()
+        if self._cap is None:
             raise SystemExit(
                 f"cannot open the operator camera: {source}\n"
                 "Start the stream on the other machine first, then confirm the "
                 "URL is reachable from this one."
             )
-        self._cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
-        self._cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
-        self.width = width
-        self.height = height
 
         self._latest = None
         self._lock = threading.Lock()
@@ -95,14 +96,44 @@ class ThreadedCamera:
             self.close()
             raise SystemExit(f"no frames arrived from {source} within {timeout:.0f}s")
 
+    def _open(self):
+        cap = self._cv2.VideoCapture(self._source)
+        if not cap.isOpened():
+            return None
+        cap.set(self._cv2.CAP_PROP_FRAME_WIDTH, self.width)
+        cap.set(self._cv2.CAP_PROP_FRAME_HEIGHT, self.height)
+        cap.set(self._cv2.CAP_PROP_BUFFERSIZE, 1)
+        return cap
+
     def _loop(self) -> None:
+        import hashlib
+
+        last_hash = None
+        last_new = time.monotonic()
         while not self._stop:
             ok, frame = self._cap.read()
             if not ok:
-                time.sleep(0.01)
-                continue
-            with self._lock:
-                self._latest = frame
+                time.sleep(0.05)
+            else:
+                h = hashlib.md5(frame.tobytes()).digest()
+                now = time.monotonic()
+                if h != last_hash:
+                    last_hash = h
+                    last_new = now
+                    with self._lock:
+                        self._latest = frame
+                # If the stream has delivered no new frame for too long, the
+                # OpenCV MJPEG connection likely went stale; reopen it.
+                if now - last_new > self._stale_after:
+                    self._cap.release()
+                    time.sleep(0.3)
+                    new_cap = self._open()
+                    if new_cap is not None:
+                        self._cap = new_cap
+                        last_hash = None
+                        last_new = time.monotonic()
+                    else:
+                        time.sleep(0.5)
 
     def read(self):
         with self._lock:

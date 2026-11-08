@@ -8,10 +8,14 @@ from .joints import validate
 class LinkerHand:
     """Real hardware backend.
 
-    The SDK polls angle at 60 Hz once polling is started, so read_angles() reads
-    a cached snapshot instead of issuing a blocking request that would contend
-    with the poll loop on the CAN bus.
+    The SDK polls angle in the background, so read_angles() reads a cached
+    snapshot instead of issuing a blocking request that would contend with the
+    poll loop on the CAN bus. Each poll is a CAN round trip, and the dispatcher
+    drops the connection once its send queue backs up; 20 Hz is well above the
+    recording rate and leaves headroom on a marginal adapter.
     """
+
+    POLL_INTERVAL_S = 1 / 20
 
     def __init__(self, side: str = "left", interface_type: str = "pcan",
                  interface_name: str = "PCAN_USBBUS1"):
@@ -31,7 +35,7 @@ class LinkerHand:
                 interface_type=self.interface_type,
             )
             self._hand.__enter__()
-            self._hand.start_polling({SensorSource.ANGLE: 1 / 60})
+            self._hand.start_polling({SensorSource.ANGLE: self.POLL_INTERVAL_S})
         except Exception as exc:
             raise SystemExit(
                 f"connection failed: {exc}\n"
@@ -45,11 +49,31 @@ class LinkerHand:
         return self
 
     def __exit__(self, *exc) -> None:
-        if self._hand is not None:
+        if self._hand is None:
+            return
+        try:
             self._hand.__exit__(*exc)
+        except Exception:
+            # Shutting down a bus that already failed must not hide the error
+            # that stopped the recording.
+            pass
 
     def set_angles(self, angles) -> None:
-        self._hand.angle.set_angles(validate(angles))
+        import queue
+
+        from linkerbot.exceptions import CANError
+
+        try:
+            self._hand.angle.set_angles(validate(angles))
+        except (queue.Full, RuntimeError, CANError) as exc:
+            raise SystemExit(
+                f"lost the CAN link while sending commands: {exc}\n"
+                "The adapter stopped accepting traffic, so the rest of this episode would\n"
+                "not match the hand's real motion. Everything already saved is intact.\n"
+                "  1. Replug the PCAN-USB adapter and check its USB 3 port\n"
+                "  2. Close anything else holding it (PCAN-View, vendor GUI)\n"
+                "  3. Re-run with --resume to keep going from the last saved episode"
+            ) from None
 
     def read_angles(self) -> list[float]:
         data = self._hand.angle.get_snapshot()

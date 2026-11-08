@@ -77,8 +77,13 @@ The operator's hand drives the hand; the D405 records what the policy will see. 
 finish an episode early, `q` to quit. Between episodes the terminal waits for Enter so the object
 can be repositioned.
 
+Recording runs at 8 fps by default. MediaPipe inference (~50 ms) and the CAN write (~32 ms) put
+the ceiling at about 9 fps on this machine, so asking for a higher rate only makes the timestamps
+disagree with the frames; the script says so when that happens.
+
 Add `--dry-run` to exercise the whole loop without sending CAN traffic, and `--no-preview` on a
-headless machine.
+headless machine. Add `--resume` to append to an existing dataset; without it `create()` starts
+over, because it does not check whether the directory is already there.
 
 ## Dataset schema
 
@@ -98,7 +103,42 @@ Two decisions worth stating:
   deploying a predicted action means calling `set_angles()` directly; no unit conversion sits
   between the policy output and the CAN frame, where an error would be hard to see.
 
+## Train
+
+```bash
+# a small wrapper: LeRobot marks the newest checkpoint with a symlink, which needs
+# admin rights on Windows; this falls back to a directory junction
+python scripts/train_act.py --dataset.repo_id=local/l20-grasp --dataset.root=datasets/l20-grasp \
+  --policy.type=act --policy.repo_id=local/act-l20-grasp --policy.push_to_hub=false \
+  --output_dir=outputs/act_l20 --steps=20000 --batch_size=8 --num_workers=4 \
+  --save_freq=5000 --trackio.enable=false
+```
+
+## Deploy
+
+```bash
+python -m l20act.eval --checkpoint outputs/act_l20/checkpoints/last/pretrained_model --seconds 30
+```
+
+The policy observes only what it saw in training — the D405 frame and the measured joint
+angles; MediaPipe and the operator camera are not involved. ACT predicts a 30-action chunk,
+but the queue is dropped every 25 steps so the policy re-observes the scene instead of
+replaying open-loop. A per-frame rate limit identical to the recording smoother caps each
+command. Press `q` in the terminal to stop, add `--dry-run` to watch the commands without
+CAN traffic.
+
 ## Status
 
-Recording pipeline verified end to end: 30 frames captured at a locked 10.0 fps in dry-run mode,
-dataset reloads with the expected shapes. Training and evaluation are next.
+The loop is closed: the policy grasps a tissue pack on the real hand, **5/5 consecutive
+successful grasps** in closed-loop evaluation (~2.2 control steps/s, object re-placed between
+runs). Final model: 25 clean single-grasp demonstrations (2000 frames at 8 fps), ACT with
+chunk size 30 trained for 20000 steps (L1 loss 0.43 → 0.09) on a single RTX 5070.
+
+Getting there took three dataset iterations, which is the real lesson of this repo:
+
+- **v1/v2 — camera pointed at the operator**, not the robot. The policy learned to react to
+  a human face. Fixing the camera aim mattered more than any hyperparameter.
+- **v3 — correct view, messy demos** (repeated open-close flapping in every episode). The
+  policy faithfully learned the rhythm but never made contact.
+- **v4 — one clean grasp per episode** (open → object to the palm → close → hold), plus a
+  shorter action chunk (100 → 30). The rhythm became an actual grip.

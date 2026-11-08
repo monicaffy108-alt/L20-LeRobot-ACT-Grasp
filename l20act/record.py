@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+import threading
 import time
 
 import numpy as np
@@ -28,6 +29,14 @@ from .joints import JOINT_NAMES, NUM_JOINTS
 from .mapping import LANDMARK_CONNECTIONS, Smoother, landmarks_to_joints
 
 IMAGE_KEY = "observation.images.robot"
+
+# The preview is drawn small: imshow is synchronous, and a 1280x480 canvas costs
+# about 50 ms per frame, which alone would cut the loop to 5 fps.
+PREVIEW_WIDTH = 360
+# MediaPipe only needs enough resolution to locate the palm; landmarks come back
+# normalised, so tracking on a downscaled copy is free in accuracy terms.
+TRACK_WIDTH = 320
+TRACK_HEIGHT = 240
 
 try:  # Windows console keyboard polling; absent on Linux/macOS
     import msvcrt as _MSVCRT
@@ -68,27 +77,72 @@ def pressed(chars: str) -> bool:
 def draw_preview(robot_frame, operator_frame, points, state, recording: bool):
     import cv2
 
-    robot = robot_frame.copy()
+    height = max(1, round(PREVIEW_WIDTH * robot_frame.shape[0] / robot_frame.shape[1]))
+    robot = cv2.resize(robot_frame, (PREVIEW_WIDTH, height), interpolation=cv2.INTER_AREA)
     label = "RECORDING" if recording else "idle"
     colour = (0, 0, 255) if recording else (200, 200, 200)
-    cv2.putText(robot, label, (12, 28), cv2.FONT_HERSHEY_SIMPLEX, 0.8, colour, 2, cv2.LINE_AA)
-    cv2.putText(robot, f"grip {100 - min(state):5.1f}", (12, 56),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1, cv2.LINE_AA)
+    cv2.putText(robot, label, (8, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.6, colour, 2, cv2.LINE_AA)
+    cv2.putText(robot, f"grip {100 - min(state):5.1f}", (8, 42),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 255), 1, cv2.LINE_AA)
 
     if operator_frame is not None:
-        operator = operator_frame.copy()
-        height, width = operator.shape[:2]
+        operator = cv2.resize(operator_frame, (PREVIEW_WIDTH, height), interpolation=cv2.INTER_AREA)
         if points:
-            pixels = [(int(x * width), int(y * height)) for x, y in points]
+            pixels = [(int(x * PREVIEW_WIDTH), int(y * height)) for x, y in points]
             for a, b in LANDMARK_CONNECTIONS:
                 cv2.line(operator, pixels[a], pixels[b], (0, 200, 0), 2, cv2.LINE_AA)
             for point in pixels:
                 cv2.circle(operator, point, 3, (0, 0, 255), -1, cv2.LINE_AA)
-        operator = cv2.resize(operator, (robot.shape[1], robot.shape[0]))
         canvas = np.hstack([robot, operator])
     else:
         canvas = robot
     cv2.imshow("L20 record - d finishes the episode, q quits", canvas)
+    cv2.waitKey(1)
+
+
+class PreviewWindow:
+    """Renders the preview on a background thread.
+
+    Drawing and imshow cost about 40 ms per frame. The preview exists only so
+    the operator can see where the hand is; it must not consume a third of the
+    recording cycle, so the loop hands over the newest frames and moves on.
+    """
+
+    def __init__(self, enabled: bool = True):
+        self.enabled = enabled
+        self._pending = None
+        self._lock = threading.Lock()
+        self._stop = False
+        self._thread = None
+
+    def start(self) -> None:
+        if not self.enabled:
+            return
+        self._thread = threading.Thread(target=self._loop, daemon=True)
+        self._thread.start()
+
+    def show(self, robot_frame, operator_frame, points, state) -> None:
+        if not self.enabled:
+            return
+        with self._lock:
+            self._pending = (robot_frame, operator_frame, points, state)
+
+    def _loop(self) -> None:
+        while not self._stop:
+            with self._lock:
+                pending, self._pending = self._pending, None
+            if pending is None:
+                time.sleep(0.005)
+                continue
+            draw_preview(*pending, True)
+        import cv2
+
+        cv2.destroyAllWindows()
+
+    def close(self) -> None:
+        self._stop = True
+        if self._thread is not None:
+            self._thread.join(timeout=2.0)
 
 
 def main(argv=None) -> int:
@@ -103,7 +157,8 @@ def main(argv=None) -> int:
     parser.add_argument("--episodes", type=int, default=1, help="number of episodes to record")
     parser.add_argument("--seconds", type=float, default=30.0,
                         help="max length of one episode; press d to finish earlier")
-    parser.add_argument("--fps", type=int, default=15, help="recording rate")
+    parser.add_argument("--fps", type=int, default=8,
+                        help="recording rate; the loop handles about 9 fps on this hardware")
     parser.add_argument("--operator-url", required=True,
                         help="MJPEG URL of the camera watching your hand, e.g. http://10.0.0.5:8080/video")
     parser.add_argument("--width", type=int, default=640)
@@ -116,16 +171,34 @@ def main(argv=None) -> int:
     parser.add_argument("--interface-type", default="pcan")
     parser.add_argument("--interface-name", default="PCAN_USBBUS1")
     parser.add_argument("--no-preview", action="store_true")
+    parser.add_argument("--resume", action="store_true",
+                        help="append to an existing dataset instead of starting a new one")
     parser.add_argument("--dry-run", action="store_true", help="no hardware; echo commands only")
     args = parser.parse_args(argv)
 
+    from lerobot.configs.video import RGBEncoderConfig
     from lerobot.datasets.lerobot_dataset import LeRobotDataset
 
     root = args.root or f"datasets/{args.repo_id.replace('/', '_')}"
     features = build_features(args.width, args.height)
-    dataset = LeRobotDataset.create(
-        repo_id=args.repo_id, fps=args.fps, features=features, root=root, use_videos=True
+    # streaming_encoding sends frames straight to an encoder thread. Without it
+    # every frame is written to disk as a PNG first, which costs ~140 ms and
+    # caps the loop far below the teleoperation rate. The default libsvtav1
+    # encoder competes with MediaPipe for CPU and lets the queue overflow, which
+    # stalls the loop for 100 ms per frame; libx264 ultrafast is ~2 ms of CPU.
+    video_options = dict(
+        streaming_encoding=True,
+        rgb_encoder=RGBEncoderConfig(vcodec="h264", preset="ultrafast", crf=23),
+        encoder_queue_maxsize=240,
     )
+    if args.resume:
+        dataset = LeRobotDataset.resume(repo_id=args.repo_id, root=root, **video_options)
+        print(f"resuming {root} at {dataset.num_episodes} episode(s), {dataset.num_frames} frames")
+    else:
+        dataset = LeRobotDataset.create(
+            repo_id=args.repo_id, fps=args.fps, features=features, root=root,
+            use_videos=True, **video_options,
+        )
 
     smoother = Smoother(alpha=args.alpha, max_step=args.max_step)
     target = [50.0] * NUM_JOINTS
@@ -143,6 +216,8 @@ def main(argv=None) -> int:
 
     recorded = 0
     quit_requested = False
+    preview = PreviewWindow(enabled=not args.no_preview)
+    preview.start()
     try:
         with hand:
             for episode in range(1, args.episodes + 1):
@@ -181,7 +256,9 @@ def main(argv=None) -> int:
                     if operator_frame is not None:
                         import cv2
 
-                        rgb = cv2.cvtColor(operator_frame, cv2.COLOR_BGR2RGB)
+                        small = cv2.resize(operator_frame, (TRACK_WIDTH, TRACK_HEIGHT),
+                                           interpolation=cv2.INTER_AREA)
+                        rgb = cv2.cvtColor(small, cv2.COLOR_BGR2RGB)
                         points = tracker.detect(rgb, int(now * 1000) % 2_000_000_000)
                     lost = points is None
                     if points is not None:
@@ -199,7 +276,7 @@ def main(argv=None) -> int:
                     frames += 1
 
                     if not args.no_preview:
-                        draw_preview(robot_frame, operator_frame, points, state, True)
+                        preview.show(robot_frame, operator_frame, points, state)
 
                     next_frame += 1.0 / args.fps
                     delay = next_frame - time.monotonic()
@@ -207,9 +284,13 @@ def main(argv=None) -> int:
                         time.sleep(delay)
 
                 elapsed = time.monotonic() - started
+                achieved = frames / max(elapsed, 1e-6)
                 if lost:
                     print("  warning: the operator hand was lost during recording")
-                print(f"  {frames} frames in {elapsed:.1f}s ({frames / max(elapsed, 1e-6):.1f} fps)")
+                print(f"  {frames} frames in {elapsed:.1f}s ({achieved:.1f} fps)")
+                if achieved < 0.9 * args.fps:
+                    print(f"  warning: the loop cannot reach {args.fps} fps, so frame timestamps"
+                          f" would be wrong; re-record with --fps {max(1, int(achieved))}")
 
                 if frames < args.fps:
                     print("  too short to be useful, discarding")
@@ -225,10 +306,7 @@ def main(argv=None) -> int:
         tracker.close()
         operator_cam.close()
         robot_cam.close()
-        if not args.no_preview:
-            import cv2
-
-            cv2.destroyAllWindows()
+        preview.close()
 
     print(f"\ndataset: {root}")
     print(f"episodes: {dataset.num_episodes}   frames: {dataset.num_frames}")
