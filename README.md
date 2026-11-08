@@ -12,6 +12,10 @@
 Vision-conditioned grasping on the LinkerHand L20, a 16-DoF dexterous hand, trained with ACT
 (Action Chunking with Transformers) through [LeRobot](https://github.com/huggingface/lerobot).
 
+<p align="center">
+  <img src="assets/demo_grasp.gif" alt="ACT policy grasps a tissue pack on the real L20" width="420">
+</p>
+
 **Demo: [the trained policy grasps a tissue pack, 5/5 runs](https://youtube.com/shorts/iZnRkgDtTtE)**
 
 ## Pipeline
