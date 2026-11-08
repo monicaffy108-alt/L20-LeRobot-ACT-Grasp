@@ -1,4 +1,4 @@
-"""Run a trained ACT policy on the real L20 hand.
+"""Run a trained policy on the real L20 hand.
 
 The loop mirrors the recording setup exactly: the D405 frame and the measured
 joint angles go in, 16 commanded angles come out. No MediaPipe, no operator
@@ -7,10 +7,11 @@ camera — the policy has never seen a human hand and must not see one now.
     python -m l20act.eval --seconds 30
     python -m l20act.eval --dry-run --seconds 5   # no CAN traffic
 
-ACT predicts a chunk of 100 actions at once. Replaying all 100 open-loop is
-fragile, so the queue is dropped every ``--replan-steps`` and the policy
-re-observes the scene. ``--max-step`` caps how far one command may move a
-joint, matching the rate limit used while recording.
+The policy type is read from the checkpoint, so the same loop serves ACT and
+Diffusion Policy. A policy predicts a whole chunk of actions at once. Replaying
+all of it open-loop is fragile, so the queue is dropped every ``--replan-steps``
+and the policy re-observes the scene. ``--max-step`` caps how far one command
+may move a joint, matching the rate limit used while recording.
 """
 
 from __future__ import annotations
@@ -30,10 +31,13 @@ DEFAULT_CHECKPOINT = "outputs/act_l20/checkpoints/last/pretrained_model"
 
 
 def load_policy(checkpoint: str):
-    from lerobot.policies.act.modeling_act import ACTPolicy
-    from lerobot.policies.factory import make_pre_post_processors
+    from lerobot.configs.policies import PreTrainedConfig
+    from lerobot.policies.factory import get_policy_class, make_pre_post_processors
 
-    policy = ACTPolicy.from_pretrained(checkpoint)
+    config = PreTrainedConfig.from_pretrained(checkpoint)
+    policy_cls = get_policy_class(config.type)
+    print(f"policy type: {config.type}")
+    policy = policy_cls.from_pretrained(checkpoint)
     preprocessor, postprocessor = make_pre_post_processors(
         policy_cfg=policy.config, pretrained_path=checkpoint
     )
@@ -75,8 +79,7 @@ def main(argv=None) -> int:
 
     print(f"loading policy: {args.checkpoint}")
     policy, preprocessor, postprocessor, device = load_policy(args.checkpoint)
-    print(f"policy ready on {device} (chunk {policy.config.chunk_size}, "
-          f"replanning every {args.replan_steps} steps)")
+    print(f"policy ready on {device} (replanning every {args.replan_steps} steps)")
 
     robot_cam = RobotCamera(width=args.width, height=args.height)
     hand = open_hand(
